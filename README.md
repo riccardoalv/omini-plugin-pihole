@@ -14,6 +14,15 @@ older (the PHP API) are not supported.
 | Local DNS records (`dns.hosts`), IPv4 only | The network's local names (`nas.lan → 192.168.1.20`); a line with several names gives one name each |
 | `dns.domain` | The network's local domain |
 | DHCP server, when it is on: leases, `dhcp.hosts`, range | Clients and their addresses, fixed addresses, pool usage |
+| The last 1000 queries: which client asked for which name | Naming where devices go in traffic flows (address → name) |
+
+The queries give at most 500 lookups, one per client and name (newest first).
+Blocked queries (gravity, regex, denylist, blocked upstream) are left out, as
+are names and clients hidden by Pi-hole's privacy level. Pi-hole does not log
+the addresses it answered, so Omini resolves the names itself. Omini uses the
+lookups only to name the destinations of traffic flows and keeps them in
+memory, never on disk. When the queries cannot be read, the rest is collected
+as usual; an Omini older than 1.6 does not ask for them.
 
 ## What it changes
 
@@ -38,7 +47,8 @@ configuration changed.
 
 Use an **application password**: Settings → Web interface / API → Expert →
 "Configure app password". It works with two-factor authentication on, and can
-be revoked without changing your own password.
+be revoked without changing your own password. It can read the query log
+(`GET /api/queries`) without `app_sudo`.
 
 To let Omini change DNS names, the application password needs
 `webserver.api.app_sudo` on (Settings → All settings → Webserver and API →
@@ -57,6 +67,7 @@ The plugin signs in (`POST /api/auth`) at the start of each run and signs out
 | GET | `/api/config/dns/hosts` | Local names (checks after a change) |
 | PUT / DELETE | `/api/config/dns/hosts/<"ip name", URL-encoded>` | `dns.set`, `dns.delete` |
 | GET | `/api/info/version`, `/api/info/host`, `/api/network/interfaces` | Version, name, MAC and addresses |
+| GET | `/api/queries?length=1000` | Recent DNS lookups |
 | GET | `/api/dhcp/leases` | DHCP leases (only when the DHCP server is on) |
 | GET | `/api/groups`, `/api/lists`, `/api/domains`, `/api/clients` | Backup |
 
@@ -72,6 +83,10 @@ tested against a fake API and the Omini devnet emulator only:
 - `/api/dhcp/leases` with `expires` (Unix time, 0 = never), `name` (`*` when
   unknown) and `hwaddr`.
 - The 403 answer to a configuration change without `app_sudo`.
+- `/api/queries` answering newest first, with `client.ip`, `domain` and
+  `status`; the blocked statuses taken from FTL's list (`GRAVITY`, `REGEX`,
+  `DENYLIST`, their `_CNAME` forms, `EXTERNAL_BLOCKED_*`, `SPECIAL_DOMAIN`),
+  and `hidden` / `0.0.0.0` for what the privacy level hides.
 
 ## Development
 

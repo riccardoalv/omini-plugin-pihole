@@ -25,6 +25,11 @@ from omini_sdk import (
     log,
 )
 
+try:  # DNS lookups: Omini 1.6 and later
+    from omini_sdk import DnsLookup
+except ImportError:
+    DnsLookup = None  # type: ignore[assignment,misc]
+
 from omini_pihole.client import Client, NotFound
 
 T = TypeVar("T")
@@ -42,6 +47,11 @@ LIVE_ROW = {
     "status",
     "name",  # a client's name as Pi-hole resolved it (not set by the user)
 }
+# Queries read, and distinct (client, name) lookups kept.
+QUERIES_LIMIT = 1000
+MAX_LOOKUPS = 500
+# Statuses of a query Pi-hole (or its upstream) blocked: nothing was reached.
+BLOCKED = ("GRAVITY", "REGEX", "DENYLIST", "BLACKLIST", "EXTERNAL_BLOCKED", "SPECIAL_DOMAIN")
 
 
 def client_from(cfg: Config) -> Client:
@@ -239,6 +249,44 @@ def pool(dhcp: dict[str, Any], used: list[DhcpLease]) -> DhcpPool | None:
     return DhcpPool(network=network, total=int(hi) - int(lo) + 1, used=in_range)
 
 
+def lookups(rows: list[Any]) -> list[Any]:
+    """One lookup per client and name, newest first (the API's order),
+    without blocked queries. Pi-hole does not log the answers' addresses:
+    Omini resolves the names itself."""
+    found: dict[tuple[str, str], None] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").upper().startswith(BLOCKED):
+            continue
+        client = row.get("client")
+        ip = str((client.get("ip") if isinstance(client, dict) else client) or "").strip()
+        domain = dns_name(row.get("domain"))
+        try:
+            hidden = ipaddress.ip_address(ip).is_unspecified  # privacy level 2 and up
+        except ValueError:
+            continue
+        if hidden or not domain or domain == "hidden":  # "hidden": privacy level 1
+            continue
+        found.setdefault((ip, domain), None)
+        if len(found) >= MAX_LOOKUPS:
+            break
+    return [DnsLookup(client=ip, domain=d) for ip, d in found]
+
+
+def recent_lookups(c: Client) -> list[Any] | None:
+    """The last queries as lookups; none with an older Omini or a failed read
+    (they only name where devices go)."""
+    if DnsLookup is None or "dns_lookups" not in Device.model_fields:
+        return None
+    try:
+        got = c.get(f"/api/queries?length={QUERIES_LIMIT}") or {}
+        return lookups(got.get("queries") or []) or None
+    except Exception as e:
+        log.debug("queries not read: %s", e)
+        return None
+
+
 def config_of(c: Client) -> dict[str, Any]:
     got = c.get("/api/config") or {}
     conf = got.get("config") if isinstance(got, dict) else None
@@ -281,6 +329,8 @@ def read(c: Client, host: str) -> Device:
             ),
         ],
     )
+    if (seen := recent_lookups(c)) is not None:
+        dev.dns_lookups = seen
     if dhcp_on:
         got = lease_rows(c)
         dev.dhcp_leases = got

@@ -6,6 +6,7 @@ import pytest
 from omini_sdk import Change, PluginError
 
 import main  # noqa: F401  (registers the functions on the SDK's plugin)
+import omini_pihole.collect as collect_module
 from omini_pihole.collect import apply, backup, collect
 from omini_pihole.collect import test as check
 
@@ -18,6 +19,48 @@ def change(kind, value):
 
 def names(dev):
     return [(r.name, r.ip) for r in dev.dns_records or []]
+
+
+def lookups(dev):
+    return [(x.client, x.domain, x.answers) for x in dev.dns_lookups or []]
+
+
+def test_collect_reads_the_queries(pihole, cfg):
+    [dev] = collect(cfg)
+    assert ("GET", "/api/queries?length=1000") in pihole.calls
+    # One per client and name, newest first, no addresses (Pi-hole does not log
+    # them); blocked queries and names or clients hidden by the privacy level
+    # are left out.
+    assert lookups(dev) == [
+        ("192.168.1.42", "example.com", None),
+        ("fd00::50", "video.example.org", None),
+    ]
+
+
+def test_collect_caps_the_lookups(pihole, cfg, monkeypatch):
+    monkeypatch.setattr(collect_module, "MAX_LOOKUPS", 1)
+    [dev] = collect(cfg)
+    assert [d for _, d, _ in lookups(dev)] == ["example.com"]
+
+
+@pytest.mark.parametrize("status", [404, 500])
+def test_collect_without_the_queries(pihole, cfg, status):
+    def handler(request):
+        if request.url.path == "/api/queries":
+            return httpx.Response(status, json={"error": {"key": "x", "message": "no"}})
+        return pihole.handler(request)
+
+    pihole.hook = handler
+    [dev] = collect(cfg)
+    assert dev.dns_lookups is None
+    assert names(dev)  # the rest is read as usual
+
+
+def test_collect_with_an_older_omini(pihole, cfg, monkeypatch):
+    monkeypatch.setattr(collect_module, "DnsLookup", None)
+    [dev] = collect(cfg)
+    assert dev.dns_lookups is None
+    assert not [c for c in pihole.calls if c[1].startswith("/api/queries")]
 
 
 def test_collect_reads_the_server(pihole, cfg):

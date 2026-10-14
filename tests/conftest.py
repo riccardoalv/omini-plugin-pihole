@@ -138,6 +138,72 @@ class FakePihole:
                 "date_modified": 1700000000,
             }
         ]
+        # GET /api/queries: newest first; Pi-hole logs no answer addresses.
+        self.queries = [
+            {
+                "id": 7,
+                "time": 1791370007.1,
+                "type": "A",
+                "domain": "Example.com",
+                "cname": None,
+                "status": "FORWARDED",
+                "client": {"ip": "192.168.1.42", "name": "laptop.lan"},
+                "dnssec": "INSECURE",
+                "reply": {"type": "IP", "time": 12.3},
+                "list_id": None,
+                "upstream": "9.9.9.9#53",
+            },
+            {
+                "id": 6,
+                "time": 1791370006.1,
+                "type": "AAAA",
+                "domain": "example.com",
+                "status": "CACHE",
+                "client": {"ip": "192.168.1.42", "name": "laptop.lan"},
+                "reply": {"type": "IP", "time": 0.1},
+            },
+            {
+                "id": 5,
+                "time": 1791370005.1,
+                "type": "A",
+                "domain": "ads.example.net",
+                "status": "GRAVITY",
+                "client": {"ip": "192.168.1.50", "name": None},
+                "reply": {"type": "IP", "time": 0.1},
+            },
+            {
+                "id": 4,
+                "time": 1791370004.1,
+                "type": "A",
+                "domain": "tracker.example.net",
+                "status": "DENYLIST_CNAME",
+                "client": {"ip": "192.168.1.50", "name": None},
+            },
+            {
+                "id": 3,
+                "time": 1791370003.1,
+                "type": "AAAA",
+                "domain": "video.example.org",
+                "status": "FORWARDED",
+                "client": {"ip": "fd00::50", "name": None},
+            },
+            {
+                "id": 2,
+                "time": 1791370002.1,
+                "type": "A",
+                "domain": "hidden",
+                "status": "FORWARDED",
+                "client": {"ip": "192.168.1.51", "name": None},
+            },
+            {
+                "id": 1,
+                "time": 1791370001.1,
+                "type": "A",
+                "domain": "secret.example",
+                "status": "FORWARDED",
+                "client": {"ip": "0.0.0.0", "name": "hidden"},
+            },
+        ]
         self.clients = [
             {
                 "client": "192.168.1.50",
@@ -206,6 +272,13 @@ class FakePihole:
                 "/api/groups": lambda: {"groups": self.groups},
                 "/api/domains": lambda: {"domains": self.domains},
                 "/api/clients": lambda: {"clients": self.clients},
+                "/api/queries": lambda: {
+                    "queries": self.queries,
+                    "cursor": 7,
+                    "recordsTotal": len(self.queries),
+                    "recordsFiltered": len(self.queries),
+                    "draw": 0,
+                },
             }
             if path not in routes:
                 return error(404, "not_found", "Not found")
