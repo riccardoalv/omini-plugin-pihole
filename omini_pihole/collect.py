@@ -1,4 +1,4 @@
-"""Pi-hole v6: the server itself, its local DNS names (dns.hosts), its DHCP
+"""Pi-hole v6: the server itself, its local DNS names (dns.hosts, A and AAAA), its DHCP
 server's leases and fixed addresses, and the dns.set / dns.delete changes."""
 
 from __future__ import annotations
@@ -107,6 +107,15 @@ def ipv4(value: Any) -> str | None:
         return None
 
 
+def ipv6(value: Any) -> str | None:
+    """An IPv6 address in its short form; :: (a blocking answer) is none."""
+    try:
+        ip = ipaddress.IPv6Address(str(value).strip())
+    except ValueError:
+        return None
+    return None if ip.is_unspecified else str(ip)
+
+
 def dns_name(value: Any) -> str:
     return str(value or "").strip().rstrip(".").lower()
 
@@ -178,13 +187,16 @@ def hosts_lines(hosts: Any) -> list[tuple[str, list[str]]]:
 
 
 def records(hosts: Any) -> list[DnsRecord]:
-    seen: dict[tuple[str, str], DnsRecord] = {}
+    """One record per name of each IPv4 (A) or IPv6 (AAAA) line; per name,
+    IPv4 first. The IPv6 ones are only read: dns.set and dns.delete manage
+    the IPv4 lines."""
+    seen: dict[tuple[str, bool, str], DnsRecord] = {}
     for ip, names in hosts_lines(hosts):
-        if not (v4 := ipv4(ip)):
+        if not (addr := ipv4(ip) or ipv6(ip)):
             continue
         for name in names:
             if name:
-                seen[(name, v4)] = DnsRecord(name=name, ip=v4)
+                seen[(name, ":" in addr, addr)] = DnsRecord(name=name, ip=addr)
     return [seen[k] for k in sorted(seen)]
 
 

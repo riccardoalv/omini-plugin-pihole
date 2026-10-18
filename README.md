@@ -15,7 +15,7 @@ older (the PHP API) are not supported.
 | Pending updates: the installed and newest versions of core, web and FTL (and Docker), from Pi-hole's own cached update check | Updates in the device panel; an update is available when any part is behind |
 | System: uptime, CPU use and count, load averages, memory (use, total, used), swap use | Health of the server in the device panel |
 | Temperature sensors (CPU, disks, others) | Health of the server; a sensor of the CPU's own driver is marked as the CPU |
-| Local DNS records (`dns.hosts`), IPv4 only | The network's local names (`nas.lan → 192.168.1.20`); a line with several names gives one name each |
+| Local DNS records (`dns.hosts`), IPv4 and IPv6 lines | The network's local names (`nas.lan → 192.168.1.20`, `nas.lan → fd00::20`); a line with several names gives one name each. IPv6 lines are only read: `dns.set` and `dns.delete` manage the IPv4 ones |
 | `dns.domain` | The network's local domain |
 | DHCP server, when it is on: leases, `dhcp.hosts`, range | Clients and their addresses, fixed addresses, pool usage |
 | The last 1000 queries: which client asked for which name | Naming where devices go in traffic flows (address → name) |

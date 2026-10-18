@@ -76,11 +76,12 @@ def test_collect_reads_the_server(pihole, cfg):
     assert dev.os_version == "6.1.2"
     # IPv6 addresses too; link-local ones are not the machine's own.
     assert dev.ips == ["192.168.1.53", "2001:db8:1::53", "fd00::53"]
-    # IPv4 names only; a line may hold several names.
+    # IPv4 and IPv6 lines; a line may hold several names.
     assert names(dev) == [
         ("nas.lan", "192.168.1.20"),
         ("printer.lan", "192.168.1.30"),
         ("scanner.lan", "192.168.1.30"),
+        ("v6.lan", "fd00::20"),
     ]
     assert dev.dns_domain == "lan"
     assert [(s.name, s.running) for s in dev.services] == [("pihole-FTL", True), ("DHCP", True)]
@@ -300,7 +301,7 @@ def test_pihole_v5(pihole, cfg):
 
 
 def test_test_returns_the_version(pihole, cfg):
-    assert check(cfg) == "Connected to Pi-hole 6.1.2, 3 local names"
+    assert check(cfg) == "Connected to Pi-hole 6.1.2, 4 local names"
     assert pihole.sessions == set()
 
 
@@ -416,7 +417,11 @@ def test_dns_set_refuses_bad_values(pihole, cfg):
 
 def test_dns_delete(pihole, cfg):
     [dev] = apply(cfg, change("dns.delete", {"name": "printer.lan"}))
-    assert names(dev) == [("nas.lan", "192.168.1.20"), ("scanner.lan", "192.168.1.30")]
+    assert names(dev) == [
+        ("nas.lan", "192.168.1.20"),
+        ("scanner.lan", "192.168.1.30"),
+        ("v6.lan", "fd00::20"),
+    ]
     assert "192.168.1.30 scanner.lan" in pihole.hosts
     pihole.calls.clear()
     apply(cfg, change("dns.delete", {"name": "printer.lan"}))
@@ -461,3 +466,28 @@ def test_backup_is_deterministic(pihole, cfg):
     assert backup(cfg)[0].content == first
     pihole.hosts.append("192.168.1.9 new.lan")
     assert backup(cfg)[0].content != first
+
+
+def test_ipv6_lines_are_read_as_records(pihole, cfg):
+    pihole.hosts.extend(["2001:DB8:0:0::20 nas.lan nas6.lan", ":: blocked.lan", "fe80::zz bad.lan"])
+    [dev] = collect(cfg)
+    assert names(dev) == [
+        ("nas.lan", "192.168.1.20"),  # IPv4 first
+        ("nas.lan", "2001:db8::20"),  # in its short form
+        ("nas6.lan", "2001:db8::20"),
+        ("printer.lan", "192.168.1.30"),
+        ("scanner.lan", "192.168.1.30"),
+        ("v6.lan", "fd00::20"),
+    ]
+
+
+def test_dns_set_on_a_name_with_only_an_ipv6_line_adds_the_ipv4_one(pihole, cfg):
+    [dev] = apply(cfg, change("dns.set", {"name": "v6.lan", "ip": "192.168.1.60"}))
+    assert "fd00::20 v6.lan" in pihole.hosts and "192.168.1.60 v6.lan" in pihole.hosts
+    assert ("v6.lan", "fd00::20") in names(dev) and ("v6.lan", "192.168.1.60") in names(dev)
+
+
+def test_dns_delete_keeps_reading_the_ipv6_line(pihole, cfg):
+    [dev] = apply(cfg, change("dns.delete", {"name": "v6.lan"}))
+    assert "fd00::20 v6.lan" in pihole.hosts
+    assert ("v6.lan", "fd00::20") in names(dev)
