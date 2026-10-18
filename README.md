@@ -12,6 +12,8 @@ older (the PHP API) are not supported.
 |---|---|
 | Versions (core, FTL), host name, network interfaces | The server on the map (vendor Pi-hole), keyed by its MAC (else its address) so it merges with the machine it runs on |
 | Network interfaces (`lo` left out): name, MAC, IPv4 and IPv6 addresses with their prefix, link (carrier), speed, type (ethernet, wireless, bridge, …) | The server's ports in the device panel |
+| System: uptime, CPU use and count, load averages, memory (use, total, used), swap use | Health of the server in the device panel |
+| Temperature sensors (CPU, disks, others) | Health of the server; a sensor of the CPU's own driver is marked as the CPU |
 | Local DNS records (`dns.hosts`), IPv4 only | The network's local names (`nas.lan → 192.168.1.20`); a line with several names gives one name each |
 | `dns.domain` | The network's local domain |
 | DHCP server, when it is on: leases, `dhcp.hosts`, range | Clients and their addresses, fixed addresses, pool usage |
@@ -50,7 +52,8 @@ configuration changed.
 Use an **application password**: Settings → Web interface / API → Expert →
 "Configure app password". It works with two-factor authentication on, and can
 be revoked without changing your own password. It can read the query log
-(`GET /api/queries`) without `app_sudo`.
+(`GET /api/queries`) and the system information (`GET /api/info/...`)
+without `app_sudo`.
 
 To let Omini change DNS names, the application password needs
 `webserver.api.app_sudo` on (Settings → All settings → Webserver and API →
@@ -70,6 +73,7 @@ The plugin signs in (`POST /api/auth`) at the start of each run and signs out
 | PUT / DELETE | `/api/config/dns/hosts/<"ip name", URL-encoded>` | `dns.set`, `dns.delete` |
 | GET | `/api/info/version`, `/api/info/host` | Version, name |
 | GET | `/api/network/interfaces` | MAC, addresses and interfaces |
+| GET | `/api/info/system`, `/api/info/sensors` | Health and temperatures |
 | GET | `/api/queries?length=1000` | Recent DNS lookups |
 | GET | `/api/dhcp/leases` | DHCP leases (only when the DHCP server is on) |
 | GET | `/api/groups`, `/api/lists`, `/api/domains`, `/api/clients` | Backup |
@@ -87,6 +91,15 @@ tested against a fake API and the Omini devnet emulator only:
   rounded (`{value, unit}`): they are left out, and read only when they come
   as plain numbers. Without the endpoint (or when it is refused), the address
   is the device's key and there are no interfaces.
+- `/api/info/system`: `uptime` (seconds), `cpu.nprocs`, `cpu["%cpu"]`,
+  `cpu.load.raw` (1, 5, 15 minutes), `memory.ram` and `memory.swap` with
+  `total` and `used` in kB and `%used`. Swap use is left out when there is no
+  swap; a field that is missing (older FTL) stays empty.
+- `/api/info/sensors`: `list[].name` (the hwmon driver) and
+  `list[].temps[]` with `name` (label), `sensor` and `value`, in `unit`
+  (`C`, `F` or `K`, converted to Celsius). The CPU is the reading of
+  `coretemp`, `k10temp`, `k8temp`, `zenpower` or `cpu_thermal`; with no chip
+  listed, `cpu_temp` (Pi-hole's own pick) is the CPU's.
 - `dns.domain` as a string (FTL 6.0) or `{name, local}` (6.1 and later).
 - `dhcp.hosts` in dnsmasq's `mac,ip,name[,lease]` form.
 - `/api/dhcp/leases` with `expires` (Unix time, 0 = never), `name` (`*` when

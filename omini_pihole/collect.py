@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import json
+import math
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, TypeVar
@@ -23,6 +24,7 @@ from omini_sdk import (
     Interface,
     PluginError,
     Service,
+    Temperature,
     log,
 )
 
@@ -272,6 +274,95 @@ def identity(ifaces: list[dict[str, Any]], host: str) -> tuple[str | None, list[
     return chosen or first, ips
 
 
+def real(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def pct(value: Any) -> float | None:
+    v = real(value)
+    return round(v, 2) if v is not None and 0 <= v <= 100 else None
+
+
+def kib(value: Any) -> int | None:
+    """FTL's memory sizes are in kB, as in /proc/meminfo."""
+    v = real(value)
+    return int(v * 1024) if v is not None and v >= 0 else None
+
+
+def health(dev: Device, c: Client) -> None:
+    """Uptime, CPU, memory, load and swap of the machine (GET /api/info/system)."""
+    got = extra(lambda: c.get("/api/info/system"), None)
+    system = got.get("system") if isinstance(got, dict) else None
+    if not isinstance(system, dict):
+        return
+    up = real(system.get("uptime"))
+    dev.uptime_s = int(up) if up is not None and up >= 0 else None
+    cpu = system.get("cpu") if isinstance(system.get("cpu"), dict) else {}
+    dev.cpu_pct = pct(cpu.get("%cpu"))
+    n = cpu.get("nprocs")
+    dev.cpu_count = n if number(n) and n >= 1 else None
+    load = (cpu.get("load") or {}).get("raw") if isinstance(cpu.get("load"), dict) else None
+    if isinstance(load, list) and len(load) == 3:
+        vals = [real(v) for v in load]
+        if all(v is not None and v >= 0 for v in vals):
+            dev.load_avg = vals  # type: ignore[assignment]
+    memory = system.get("memory") if isinstance(system.get("memory"), dict) else {}
+    ram = memory.get("ram") if isinstance(memory.get("ram"), dict) else {}
+    dev.mem_pct = pct(ram.get("%used"))
+    dev.mem_total_bytes = kib(ram.get("total")) or None
+    dev.mem_used_bytes = kib(ram.get("used"))
+    swap = memory.get("swap") if isinstance(memory.get("swap"), dict) else {}
+    if (real(swap.get("total")) or 0) > 0:  # without swap there is no swap use
+        dev.swap_pct = pct(swap.get("%used"))
+
+
+# hwmon drivers of a CPU's own sensor (a Raspberry Pi's SoC is its CPU).
+CPU_SENSORS = {"coretemp", "k10temp", "k8temp", "zenpower", "cpu_thermal", "cpu-thermal"}
+
+
+def celsius(value: Any, unit: str) -> float | None:
+    v = real(value)
+    if v is None:
+        return None
+    if unit == "F":
+        v = (v - 32) * 5 / 9
+    elif unit == "K":
+        v -= 273.15
+    elif unit not in ("C", ""):
+        return None
+    return round(v, 1)
+
+
+def temperatures(c: Client) -> list[Temperature] | None:
+    """The machine's temperature sensors (GET /api/info/sensors), in the unit
+    Pi-hole is set to show (C, F or K)."""
+    got = extra(lambda: c.get("/api/info/sensors"), None)
+    sensors = got.get("sensors") if isinstance(got, dict) else None
+    if not isinstance(sensors, dict):
+        return None
+    unit = str(sensors.get("unit") or "C").upper()
+    out: list[Temperature] = []
+    for chip in sensors.get("list") or []:
+        if not isinstance(chip, dict):
+            continue
+        chip_name = str(chip.get("name") or "").strip()
+        temps = [t for t in chip.get("temps") or [] if isinstance(t, dict)]
+        for t in temps:
+            if (deg := celsius(t.get("value"), unit)) is None:
+                continue
+            label = str(t.get("name") or t.get("sensor") or "").strip()
+            name = chip_name if len(temps) == 1 or not label else f"{chip_name} {label}".strip()
+            if not name:
+                continue
+            kind = "cpu" if chip_name.lower() in CPU_SENSORS else "other"
+            out.append(Temperature(sensor=name, kind=kind, celsius=deg))
+    if not out and (deg := celsius(sensors.get("cpu_temp"), unit)) is not None:
+        out.append(Temperature(sensor="CPU", kind="cpu", celsius=deg))  # Pi-hole's own pick
+    return out or None
+
+
 def lease_rows(c: Client) -> list[DhcpLease]:
     got = optional(lambda: c.get("/api/dhcp/leases"), None) or {}
     out = []
@@ -418,6 +509,8 @@ def read(c: Client, host: str) -> Device:
             ),
         ],
     )
+    health(dev, c)
+    dev.temperatures = temperatures(c)
     if (seen := recent_lookups(c)) is not None:
         dev.dns_lookups = seen
     if dhcp_on:

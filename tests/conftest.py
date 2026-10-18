@@ -160,6 +160,64 @@ class FakePihole:
                 "addresses": [],
             },
         ]
+        # GET /api/info/system: memory in kB (/proc/meminfo).
+        self.system = {
+            "uptime": 1234567,
+            "memory": {
+                "ram": {
+                    "total": 3882924,
+                    "free": 2187380,
+                    "used": 707472,
+                    "available": 2949408,
+                    "%used": 18.22,
+                },
+                "swap": {"total": 102396, "free": 76797, "used": 25599, "%used": 25.0},
+            },
+            "procs": 171,
+            "cpu": {
+                "nprocs": 4,
+                "%cpu": 1.6,
+                "load": {"raw": [0.05, 0.09, 0.08], "percent": [1.25, 2.25, 2.0]},
+            },
+            "ftl": {"%mem": 0.68, "%cpu": 0.2},
+        }
+        # GET /api/info/sensors: hwmon chips, in webserver.api.temp.unit.
+        self.sensors = {
+            "list": [
+                {
+                    "name": "cpu_thermal",
+                    "path": "devices/virtual/thermal/thermal_zone0/hwmon0",
+                    "source": "/sys/class/hwmon/hwmon0",
+                    "temps": [
+                        {"name": None, "value": 48.3, "max": None, "crit": None, "sensor": "temp1"}
+                    ],
+                },
+                {
+                    "name": "nvme",
+                    "path": "devices/pci0000:00/nvme/nvme0/hwmon1",
+                    "source": "/sys/class/hwmon/hwmon1",
+                    "temps": [
+                        {
+                            "name": "Composite",
+                            "value": 39.85,
+                            "max": 81.85,
+                            "crit": 84.85,
+                            "sensor": "temp1",
+                        },
+                        {
+                            "name": "Sensor 1",
+                            "value": 41.85,
+                            "max": 65261.85,
+                            "crit": None,
+                            "sensor": "temp2",
+                        },
+                    ],
+                },
+            ],
+            "cpu_temp": 48.3,
+            "hot_limit": 60,
+            "unit": "C",
+        }
         self.lists = [
             {
                 "address": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
@@ -330,6 +388,8 @@ class FakePihole:
                     "host": {"uname": {"nodename": "pihole", "machine": "aarch64"}, "model": None}
                 },
                 "/api/network/interfaces": lambda: {"interfaces": self.interfaces},
+                "/api/info/system": lambda: {"system": self.system},
+                "/api/info/sensors": lambda: {"sensors": self.sensors},
                 "/api/dhcp/leases": lambda: {"leases": self.leases},
                 "/api/lists": lambda: {"lists": self.lists},
                 "/api/groups": lambda: {"groups": self.groups},

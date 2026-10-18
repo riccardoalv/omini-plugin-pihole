@@ -190,6 +190,56 @@ def test_interfaces_refused(pihole, cfg):
     assert names(dev)
 
 
+def test_collect_reads_the_health(pihole, cfg):
+    [dev] = collect(cfg)
+    assert (dev.uptime_s, dev.cpu_pct, dev.cpu_count, dev.load_avg) == (
+        1234567,
+        1.6,
+        4,
+        [0.05, 0.09, 0.08],
+    )
+    assert (dev.mem_pct, dev.mem_total_bytes, dev.mem_used_bytes, dev.swap_pct) == (
+        18.22,
+        3882924 * 1024,
+        707472 * 1024,
+        25.0,
+    )
+    assert [(t.sensor, t.kind, t.celsius) for t in dev.temperatures] == [
+        ("cpu_thermal", "cpu", 48.3),
+        ("nvme Composite", "other", 39.9),
+        ("nvme Sensor 1", "other", 41.9),
+    ]
+
+
+def test_health_without_swap_and_in_fahrenheit(pihole, cfg):
+    pihole.system["memory"]["swap"] = {"total": 0, "free": 0, "used": 0, "%used": None}
+    del pihole.system["cpu"]["%cpu"]  # FTL versions without it
+    pihole.sensors = {"list": [], "cpu_temp": 122.0, "hot_limit": 140, "unit": "F"}
+    [dev] = collect(cfg)
+    assert dev.swap_pct is None and dev.cpu_pct is None and dev.mem_pct == 18.22
+    # No hwmon chips: Pi-hole's own CPU reading, in Celsius.
+    assert [(t.sensor, t.kind, t.celsius) for t in dev.temperatures] == [("CPU", "cpu", 50.0)]
+
+
+@pytest.mark.parametrize("status", [403, 404, 500])
+def test_collect_without_health(pihole, cfg, status):
+    def handler(request):
+        if request.url.path in ("/api/info/system", "/api/info/sensors"):
+            return httpx.Response(status, json={"error": {"key": "x", "message": "no"}})
+        return pihole.handler(request)
+
+    pihole.hook = handler
+    [dev] = collect(cfg)
+    assert (dev.uptime_s, dev.cpu_pct, dev.mem_pct, dev.load_avg, dev.temperatures) == (
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    assert names(dev)  # the rest is read as usual
+
+
 def test_wrong_password(pihole, cfg):
     cfg["password"] = "nope"
     with pytest.raises(PluginError, match="rejected the password"):
