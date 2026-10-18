@@ -381,14 +381,21 @@ def item(line: str) -> str:
 
 
 def answers(hosts: list[str], name: str) -> list[str]:
-    """The addresses of the lines that hold name."""
-    return [ip for ip, names in hosts_lines(hosts) if name in names]
+    """The IPv4 addresses of the lines that hold name (Omini manages IPv4
+    names only: IPv6 lines are never touched)."""
+    return [ip for ip, names in hosts_lines(hosts) if name in names and ipv4(ip)]
 
 
 def replace_lines(c: Client, hosts: list[str], name: str, new: str | None) -> None:
-    """Take name out of every line that holds it (keeping the line's other
+    """Take name out of every IPv4 line that holds it (keeping the line's other
     names) and add the line new; put everything back if Pi-hole refuses."""
-    touched = [h for h in hosts if name in [dns_name(n) for n in h.split()[1:]]]
+    touched = [
+        h
+        for h in hosts
+        if len(h.split()) >= 2
+        and ipv4(h.split()[0])
+        and name in [dns_name(n) for n in h.split()[1:]]
+    ]
     done: list[tuple[str, str]] = []  # (method, line) applied, to undo
     try:
         for line in touched:

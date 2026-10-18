@@ -28,8 +28,8 @@ as usual; an Omini older than 1.6 does not ask for them.
 
 | Change | What it does |
 |---|---|
-| `dns.set` `{name, ip}` | Adds the record `ip name`; when the name is on another line, takes it out of that line (the line's other names stay) first. Read again to check it took. If Pi-hole refuses a step, the lines already changed are put back. |
-| `dns.delete` `{name}` | Takes the name out of every line that holds it. Read again to check. |
+| `dns.set` `{name, ip}` | Adds the record `ip name`; when the name is on another IPv4 line, takes it out of that line (the line's other names stay) first; IPv6 lines are never touched. Read again to check it took. If Pi-hole refuses a step, the lines already changed are put back. |
+| `dns.delete` `{name}` | Takes the name out of every IPv4 line that holds it (IPv6 lines stay). Read again to check. |
 
 Pi-hole saves its configuration (`pihole.toml`) by itself. Records have no
 description field, so the ones Omini made are not marked.

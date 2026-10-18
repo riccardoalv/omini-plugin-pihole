@@ -177,6 +177,16 @@ def test_dns_set_changes_the_address_of_the_same_name(pihole, cfg):
     assert "192.168.1.20 nas.lan" not in pihole.hosts
 
 
+def test_dns_changes_never_touch_ipv6_lines(pihole, cfg):
+    pihole.hosts.append("fd00::20 nas.lan")
+    apply(cfg, change("dns.set", {"name": "nas.lan", "ip": "192.168.1.25"}))
+    assert "fd00::20 nas.lan" in pihole.hosts
+    assert "192.168.1.25 nas.lan" in pihole.hosts
+    apply(cfg, change("dns.delete", {"name": "nas.lan"}))
+    assert "fd00::20 nas.lan" in pihole.hosts
+    assert "192.168.1.25 nas.lan" not in pihole.hosts
+
+
 def test_dns_set_keeps_the_other_names_of_a_line(pihole, cfg):
     apply(cfg, change("dns.set", {"name": "scanner.lan", "ip": "192.168.1.31"}))
     assert "192.168.1.30 printer.lan" in pihole.hosts
