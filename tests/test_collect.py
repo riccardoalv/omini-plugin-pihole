@@ -74,7 +74,8 @@ def test_collect_reads_the_server(pihole, cfg):
         "Pi-hole",
     )
     assert dev.os_version == "6.1.2"
-    assert dev.ips == ["192.168.1.53"]
+    # IPv6 addresses too; link-local ones are not the machine's own.
+    assert dev.ips == ["192.168.1.53", "2001:db8:1::53", "fd00::53"]
     # IPv4 names only; a line may hold several names.
     assert names(dev) == [
         ("nas.lan", "192.168.1.20"),
@@ -127,6 +128,66 @@ def test_old_domain_setting_and_no_interfaces(pihole, cfg):
     assert dev.dns_domain == "home.arpa"
     # Without the interfaces, the address is the key.
     assert dev.key == "192.168.1.53" and dev.macs is None and dev.ips == ["192.168.1.53"]
+    assert dev.interfaces is None
+
+
+def test_collect_reads_the_interfaces(pihole, cfg):
+    [dev] = collect(cfg)
+    got = {i.name: i for i in dev.interfaces}
+    assert list(got) == ["eth0", "wlan0"]  # lo is left out
+    eth = got["eth0"]
+    assert (eth.type, eth.mac, eth.up, eth.speed_mbps) == (
+        "ethernet",
+        MAC,
+        True,
+        1000,
+    )
+    # v4 and v6 with their prefix; link-local left out.
+    assert eth.ips == ["192.168.1.53/24", "2001:db8:1::53/64", "fd00::53/64"]
+    # FTL rounds its counters ({value, unit}): not counters, so left out.
+    assert eth.rx_bytes is None and eth.tx_bytes is None
+    wlan = got["wlan0"]
+    assert (wlan.type, wlan.mac, wlan.up, wlan.speed_mbps, wlan.ips) == (
+        "wireless",
+        "dc:a6:32:01:02:04",
+        False,
+        None,
+        None,
+    )
+
+
+def test_interfaces_with_raw_counters_and_kinds(pihole, cfg):
+    pihole.interfaces[1]["stats"] = {"rx_bytes": 3189000000, "tx_bytes": 718600000}
+    pihole.interfaces.append(
+        {
+            "name": "br0",
+            "type": "ether",
+            "kind": "bridge",
+            "state": "up",
+            "address": "02:42:ac:11:00:01",
+            "addresses": [{"address": "10.0.0.1/16"}],
+        }
+    )
+    pihole.interfaces.append({"name": "tun0", "type": "none", "state": "unknown"})
+    [dev] = collect(cfg)
+    got = {i.name: i for i in dev.interfaces}
+    assert (got["eth0"].rx_bytes, got["eth0"].tx_bytes) == (3189000000, 718600000)
+    br = got["br0"]
+    assert (br.type, br.up, br.ips, br.speed_mbps) == ("bridge", True, ["10.0.0.1/16"], None)
+    tun = got["tun0"]
+    assert (tun.type, tun.up, tun.mac) == ("other", None, None)
+
+
+def test_interfaces_refused(pihole, cfg):
+    def handler(request):
+        if request.url.path == "/api/network/interfaces":
+            return httpx.Response(403, json={"error": {"key": "forbidden"}})
+        return pihole.handler(request)
+
+    pihole.hook = handler
+    [dev] = collect(cfg)
+    assert dev.interfaces is None and dev.key == "192.168.1.53"
+    assert names(dev)
 
 
 def test_wrong_password(pihole, cfg):

@@ -86,15 +86,78 @@ class FakePihole:
             "ftl": {"local": {"branch": "master", "version": "v6.2.3", "hash": "ghi"}},
             "docker": {"local": None},
         }
+        # GET /api/network/interfaces (FTL 6.x, netlink): the counters come
+        # rounded as {value, unit}, the speed in Mbit/s (-1 when unknown).
         self.interfaces = [
-            {"name": "lo", "address": "00:00:00:00:00:00", "addresses": [{"address": "127.0.0.1"}]},
+            {
+                "name": "lo",
+                "index": 1,
+                "type": "loopback",
+                "flags": ["up", "loopback", "running", "lower_up"],
+                "state": "unknown",
+                "carrier": True,
+                "speed": -1,
+                "address": "00:00:00:00:00:00",
+                "stats": {"rx_bytes": {"value": 1.2, "unit": "M"}, "rx_packets": 300},
+                "addresses": [
+                    {"family": "inet", "address": "127.0.0.1", "prefixlen": 8, "scope": "host"},
+                    {"family": "inet6", "address": "::1", "prefixlen": 128, "scope": "host"},
+                ],
+            },
             {
                 "name": "eth0",
+                "index": 2,
+                "type": "ether",
+                "flags": ["up", "broadcast", "running", "multicast", "lower_up"],
+                "state": "up",
+                "carrier": True,
+                "speed": 1000,
                 "address": "dc:a6:32:01:02:03",
+                "perm_address": "dc:a6:32:01:02:03",
+                "broadcast": "ff:ff:ff:ff:ff:ff",
+                "stats": {
+                    "rx_bytes": {"value": 2.97, "unit": "G"},
+                    "tx_bytes": {"value": 685.3, "unit": "M"},
+                    "rx_packets": 4512345,
+                    "tx_packets": 1234567,
+                    "rx_errors": 0,
+                    "tx_errors": 0,
+                },
                 "addresses": [
-                    {"family": "inet", "address": "192.168.1.53", "prefixlen": 24},
-                    {"family": "inet6", "address": "fe80::dea6:32ff:fe01:203", "prefixlen": 64},
+                    {
+                        "family": "inet",
+                        "address": "192.168.1.53",
+                        "prefixlen": 24,
+                        "scope": "global",
+                        "broadcast": "192.168.1.255",
+                        "label": "eth0",
+                    },
+                    {
+                        "family": "inet6",
+                        "address": "2001:db8:1::53",
+                        "prefixlen": 64,
+                        "scope": "global",
+                    },
+                    {"family": "inet6", "address": "fd00::53", "prefixlen": 64, "scope": "global"},
+                    {
+                        "family": "inet6",
+                        "address": "fe80::dea6:32ff:fe01:203",
+                        "prefixlen": 64,
+                        "scope": "link",
+                    },
                 ],
+            },
+            {
+                "name": "wlan0",
+                "index": 3,
+                "type": "ether",
+                "flags": ["broadcast", "multicast"],
+                "state": "down",
+                "carrier": False,
+                "speed": -1,
+                "address": "dc:a6:32:01:02:04",
+                "stats": {"rx_bytes": {"value": 0, "unit": ""}},
+                "addresses": [],
             },
         ]
         self.lists = [

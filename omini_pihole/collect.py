@@ -20,6 +20,7 @@ from omini_sdk import (
     DhcpPool,
     DhcpReservation,
     DnsRecord,
+    Interface,
     PluginError,
     Service,
     log,
@@ -74,6 +75,16 @@ def optional(fn: Callable[[], T], default: T) -> T:
     try:
         return fn()
     except NotFound:
+        return default
+
+
+def extra(fn: Callable[[], T], default: T) -> T:
+    """A read that only adds detail: its default when it is missing (404),
+    refused (403) or fails, so the collection goes on."""
+    try:
+        return fn()
+    except (NotFound, PluginError) as e:
+        log.debug("not read: %s", e)
         return default
 
 
@@ -143,7 +154,9 @@ def domain_of(dns: dict[str, Any]) -> str | None:
 
 
 def interfaces(c: Client) -> list[dict[str, Any]]:
-    got = optional(lambda: c.get("/api/network/interfaces"), None) or {}
+    got = extra(lambda: c.get("/api/network/interfaces"), None) or {}
+    if not isinstance(got, dict):
+        return []
     return [i for i in got.get("interfaces") or [] if isinstance(i, dict)]
 
 
@@ -158,6 +171,80 @@ def addresses_of(iface: dict[str, Any]) -> list[str]:
         if not (ip.is_loopback or ip.is_link_local or ip.is_unspecified):
             out.append(str(ip))
     return out
+
+
+def prefixed(iface: dict[str, Any]) -> list[str]:
+    """The interface's IPv4 and IPv6 addresses with their prefix length
+    (192.168.1.53/24, 2001:db8::53/64); link-local ones are left out."""
+    out = []
+    for a in iface.get("addresses") or []:
+        text = str((a.get("address") if isinstance(a, dict) else a) or "").strip()
+        try:
+            ip = ipaddress.ip_address(text.split("/")[0])
+        except ValueError:
+            continue
+        if ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+            continue
+        prefix: Any = text.split("/")[1] if "/" in text else None
+        if prefix is None and isinstance(a, dict):
+            prefix = a.get("prefixlen")
+        if isinstance(prefix, str) and prefix.isdigit():
+            prefix = int(prefix)
+        # Without a known prefix: the address alone.
+        known = number(prefix) and 0 <= prefix <= ip.max_prefixlen
+        value = f"{ip}/{prefix}" if known else str(ip)
+        if value not in out:
+            out.append(value)
+    return out
+
+
+def number(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def counter(value: Any) -> int | None:
+    """A byte counter as a plain integer. FTL gives a rounded {value, unit}
+    instead, which is not a counter: left out."""
+    return value if number(value) and value >= 0 else None
+
+
+# netlink's link kind (IFLA_INFO_KIND), when FTL gives it.
+KINDS = {"bridge": "bridge", "vlan": "vlan", "bond": "lag", "team": "lag", "wireguard": "tunnel"}
+
+
+def kind_of(iface: dict[str, Any]) -> Any:
+    kind = str(iface.get("kind") or "").lower()
+    if kind:
+        return KINDS.get(kind, "other")
+    if str(iface.get("type") or "").lower() != "ether":
+        return "other"
+    # Linux names its Wi-Fi interfaces wlan0, wlp2s0…
+    return "wireless" if str(iface.get("name") or "").startswith("wl") else "ethernet"
+
+
+def port(iface: dict[str, Any]) -> Interface | None:
+    name = str(iface.get("name") or "").strip()
+    if not name or name == "lo" or str(iface.get("type") or "").lower() == "loopback":
+        return None
+    carrier, state = iface.get("carrier"), str(iface.get("state") or "").lower()
+    up = carrier if isinstance(carrier, bool) else {"up": True, "down": False}.get(state)
+    speed = iface.get("speed")  # Mbit/s; -1 when the driver does not know
+    stats = iface.get("stats")
+    stats = stats if isinstance(stats, dict) else {}
+    return Interface(
+        name=name,
+        type=kind_of(iface),
+        mac=mac(iface.get("address")) or mac(iface.get("perm_address")),
+        ips=prefixed(iface) or None,
+        up=up,
+        speed_mbps=speed if number(speed) and speed > 0 else None,
+        rx_bytes=counter(stats.get("rx_bytes")),
+        tx_bytes=counter(stats.get("tx_bytes")),
+    )
+
+
+def ports(ifaces: list[dict[str, Any]]) -> list[Interface]:
+    return [p for i in ifaces if (p := port(i))]
 
 
 def identity(ifaces: list[dict[str, Any]], host: str) -> tuple[str | None, list[str]]:
@@ -302,7 +389,8 @@ def read(c: Client, host: str) -> Device:
     vers = versions(optional(lambda: c.get("/api/info/version"), None) or {})
     info = (optional(lambda: c.get("/api/info/host"), None) or {}).get("host") or {}
     uname = info.get("uname") or {}
-    m, ips = identity(interfaces(c), host)
+    ifaces = interfaces(c)
+    m, ips = identity(ifaces, host)
     dhcp_on = bool(dhcp.get("active"))
     dev = Device(
         key=m or host,
@@ -314,6 +402,7 @@ def read(c: Client, host: str) -> Device:
         os_version=vers.get("core"),
         macs=[m] if m else None,
         ips=ips or None,
+        interfaces=ports(ifaces) or None,
         dns_records=records(dns.get("hosts")),
         dns_domain=domain_of(dns),
         services=[

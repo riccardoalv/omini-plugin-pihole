@@ -11,6 +11,7 @@ older (the PHP API) are not supported.
 | Data | Used for |
 |---|---|
 | Versions (core, FTL), host name, network interfaces | The server on the map (vendor Pi-hole), keyed by its MAC (else its address) so it merges with the machine it runs on |
+| Network interfaces (`lo` left out): name, MAC, IPv4 and IPv6 addresses with their prefix, link (carrier), speed, type (ethernet, wireless, bridge, …) | The server's ports in the device panel |
 | Local DNS records (`dns.hosts`), IPv4 only | The network's local names (`nas.lan → 192.168.1.20`); a line with several names gives one name each |
 | `dns.domain` | The network's local domain |
 | DHCP server, when it is on: leases, `dhcp.hosts`, range | Clients and their addresses, fixed addresses, pool usage |
@@ -67,7 +68,8 @@ The plugin signs in (`POST /api/auth`) at the start of each run and signs out
 | GET | `/api/config` | `dns.hosts`, `dns.domain`, `dhcp`; backup |
 | GET | `/api/config/dns/hosts` | Local names (checks after a change) |
 | PUT / DELETE | `/api/config/dns/hosts/<"ip name", URL-encoded>` | `dns.set`, `dns.delete` |
-| GET | `/api/info/version`, `/api/info/host`, `/api/network/interfaces` | Version, name, MAC and addresses |
+| GET | `/api/info/version`, `/api/info/host` | Version, name |
+| GET | `/api/network/interfaces` | MAC, addresses and interfaces |
 | GET | `/api/queries?length=1000` | Recent DNS lookups |
 | GET | `/api/dhcp/leases` | DHCP leases (only when the DHCP server is on) |
 | GET | `/api/groups`, `/api/lists`, `/api/domains`, `/api/clients` | Backup |
@@ -77,8 +79,14 @@ The plugin signs in (`POST /api/auth`) at the start of each run and signs out
 The plugin follows Pi-hole's API documentation (`/api/docs`, FTL 6.x) and was
 tested against a fake API and the Omini devnet emulator only:
 
-- `/api/network/interfaces`: the MAC in `address` (or `perm_address`) and the
-  IPs in `addresses[].address`. Without it, the address is the device's key.
+- `/api/network/interfaces`: the MAC in `address` (or `perm_address`), the
+  IPs in `addresses[].address` with `prefixlen`, the link in `carrier` (else
+  `state`), `speed` in Mbit/s (-1 when unknown), `type` (`ether`,
+  `loopback`, …) and, when given, the link `kind` (`bridge`, `vlan`, `bond`).
+  A Wi-Fi interface is told by its name (`wl…`). FTL gives the byte counters
+  rounded (`{value, unit}`): they are left out, and read only when they come
+  as plain numbers. Without the endpoint (or when it is refused), the address
+  is the device's key and there are no interfaces.
 - `dns.domain` as a string (FTL 6.0) or `{name, local}` (6.1 and later).
 - `dhcp.hosts` in dnsmasq's `mac,ip,name[,lease]` form.
 - `/api/dhcp/leases` with `expires` (Unix time, 0 = never), `name` (`*` when
