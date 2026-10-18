@@ -252,7 +252,7 @@ def pool(dhcp: dict[str, Any], used: list[DhcpLease]) -> DhcpPool | None:
 def lookups(rows: list[Any]) -> list[Any]:
     """One lookup per client and name, newest first (the API's order),
     without blocked queries. Pi-hole does not log the answers' addresses:
-    Omini resolves the names itself."""
+    Omini asks the Pi-hole for them (a DNS query)."""
     found: dict[tuple[str, str], None] = {}
     for row in rows:
         if not isinstance(row, dict):

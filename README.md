@@ -19,10 +19,11 @@ older (the PHP API) are not supported.
 The queries give at most 500 lookups, one per client and name (newest first).
 Blocked queries (gravity, regex, denylist, blocked upstream) are left out, as
 are names and clients hidden by Pi-hole's privacy level. Pi-hole does not log
-the addresses it answered, so Omini resolves the names itself. Omini uses the
-lookups only to name the destinations of traffic flows and keeps them in
-memory, never on disk. When the queries cannot be read, the rest is collected
-as usual; an Omini older than 1.6 does not ask for them.
+the addresses it answered, so Omini asks the Pi-hole for them (a DNS query to
+it for each name). Omini uses the lookups only to name the destinations of
+traffic flows and keeps them in memory, never on disk. When the queries
+cannot be read, the rest is collected as usual; an Omini older than 1.6 does
+not ask for them.
 
 ## What it changes
 
