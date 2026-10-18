@@ -402,13 +402,15 @@ def replace_lines(c: Client, hosts: list[str], name: str, new: str | None) -> No
                 done.append(("PUT", kept))
         if new:
             c.put(item(new))
-    except PluginError:
+    except (PluginError, NotFound) as e:
         for method, line in reversed(done):
             with contextlib.suppress(PluginError, NotFound):
                 if method == "DELETE":
                     c.put(item(line))
                 else:
                     c.delete(item(line))
+        if isinstance(e, NotFound):
+            raise PluginError(f"Pi-hole did not find {e}; the lines changed were put back") from e
         raise
 
 

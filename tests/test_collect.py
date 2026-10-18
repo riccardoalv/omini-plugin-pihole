@@ -211,6 +211,19 @@ def test_dns_set_puts_lines_back_when_refused(pihole, cfg):
     assert sorted(pihole.hosts) == sorted(before)
 
 
+def test_dns_set_puts_lines_back_on_not_found(pihole, cfg):
+    def handler(request):
+        if request.method == "PUT" and "192.168.1.25" in request.url.raw_path.decode():
+            return httpx.Response(404, json={"error": {"key": "not_found", "message": "Gone"}})
+        return pihole.handler(request)
+
+    pihole.hook = handler
+    before = list(pihole.hosts)
+    with pytest.raises(PluginError, match="put back"):
+        apply(cfg, change("dns.set", {"name": "nas.lan", "ip": "192.168.1.25"}))
+    assert sorted(pihole.hosts) == sorted(before)
+
+
 def test_dns_set_not_kept_fails_the_verification(pihole, cfg):
     def handler(request):
         resp = pihole.handler(request)
