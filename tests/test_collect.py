@@ -240,6 +240,53 @@ def test_collect_without_health(pihole, cfg, status):
     assert names(dev)  # the rest is read as usual
 
 
+def test_collect_reads_the_versions(pihole, cfg):
+    [dev] = collect(cfg)
+    fw = dev.firmware
+    assert fw.current == "core 6.1.2, web 6.2.1, FTL 6.2.3"
+    assert fw.latest == "core 6.1.2, web 6.2.1, FTL 6.3"
+    assert fw.update_available is True  # FTL is behind
+    assert fw.checked_at is None  # Pi-hole does not say when it checked
+
+
+def test_versions_up_to_date(pihole, cfg):
+    pihole.version["ftl"]["remote"] = {"version": "v6.2.3", "hash": "ghi"}
+    [dev] = collect(cfg)
+    assert dev.firmware.update_available is False
+    assert dev.firmware.latest == dev.firmware.current
+
+
+def test_versions_on_another_branch_compare_the_commits(pihole, cfg):
+    pihole.version["ftl"] = {
+        "local": {"branch": "development", "version": "vDev-1234", "hash": "ghi"},
+        "remote": {"version": "vDev-1234", "hash": "zzz"},
+    }
+    [dev] = collect(cfg)
+    assert dev.firmware.update_available is True
+
+
+def test_versions_never_checked(pihole, cfg):
+    for part in ("core", "web", "ftl"):
+        pihole.version[part]["remote"] = None
+    [dev] = collect(cfg)
+    fw = dev.firmware
+    assert fw.current == "core 6.1.2, web 6.2.1, FTL 6.2.3"
+    assert (fw.latest, fw.update_available) == (None, None)
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_collect_without_the_versions(pihole, cfg, status):
+    def handler(request):
+        if request.url.path == "/api/info/version":
+            return httpx.Response(status, json={"error": {"key": "x", "message": "no"}})
+        return pihole.handler(request)
+
+    pihole.hook = handler
+    [dev] = collect(cfg)
+    assert dev.firmware is None and dev.os_version is None
+    assert names(dev)
+
+
 def test_wrong_password(pihole, cfg):
     cfg["password"] = "nope"
     with pytest.raises(PluginError, match="rejected the password"):

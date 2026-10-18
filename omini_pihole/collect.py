@@ -21,6 +21,7 @@ from omini_sdk import (
     DhcpPool,
     DhcpReservation,
     DnsRecord,
+    Firmware,
     Interface,
     PluginError,
     Service,
@@ -124,6 +125,46 @@ def versions(info: dict[str, Any]) -> dict[str, str]:
         if (pv := plain_version(v)) is not None:
             out[part] = pv
     return out
+
+
+# Pi-hole's parts, in the order they are shown.
+PARTS = (("core", "core"), ("web", "web"), ("ftl", "FTL"), ("docker", "Docker"))
+
+
+def side(row: Any, which: str) -> dict[str, Any]:
+    got = row.get(which) if isinstance(row, dict) else None
+    return got if isinstance(got, dict) else {}
+
+
+def firmware(info: dict[str, Any]) -> Firmware | None:
+    """Installed and newest versions of Pi-hole's parts, from Pi-hole's own
+    (cached) update check: "core 6.1.2, web 6.2.1, FTL 6.2.3"."""
+    parts = info.get("version") if isinstance(info.get("version"), dict) else {}
+    current: list[str] = []
+    latest: list[str] = []
+    newer = unknown = False
+    for key, label in PARTS:
+        local, remote = side(parts.get(key), "local"), side(parts.get(key), "remote")
+        here, there = plain_version(local.get("version")), plain_version(remote.get("version"))
+        if here is None:
+            continue
+        current.append(f"{label} {here}")
+        if there is None:  # not checked (yet): the newest version is unknown
+            unknown = True
+            continue
+        latest.append(f"{label} {there}")
+        lh, rh = local.get("hash"), remote.get("hash")
+        if local.get("branch") not in (None, "", "master") and lh and rh:
+            newer |= str(lh) != str(rh)  # another branch: Pi-hole compares the commits
+        else:
+            newer |= here != there
+    if not current:
+        return None
+    return Firmware(
+        current=", ".join(current),
+        latest=None if unknown else ", ".join(latest),
+        update_available=True if newer else (None if unknown else False),
+    )
 
 
 def hosts_lines(hosts: Any) -> list[tuple[str, list[str]]]:
@@ -477,7 +518,9 @@ def read(c: Client, host: str) -> Device:
     conf = config_of(c)
     dns = conf.get("dns") or {}
     dhcp = conf.get("dhcp") or {}
-    vers = versions(optional(lambda: c.get("/api/info/version"), None) or {})
+    version_info = extra(lambda: c.get("/api/info/version"), None)
+    version_info = version_info if isinstance(version_info, dict) else {}
+    vers = versions(version_info)
     info = (optional(lambda: c.get("/api/info/host"), None) or {}).get("host") or {}
     uname = info.get("uname") or {}
     ifaces = interfaces(c)
@@ -491,6 +534,7 @@ def read(c: Client, host: str) -> Device:
         vendor="Pi-hole",
         model="Pi-hole",
         os_version=vers.get("core"),
+        firmware=firmware(version_info),
         macs=[m] if m else None,
         ips=ips or None,
         interfaces=ports(ifaces) or None,

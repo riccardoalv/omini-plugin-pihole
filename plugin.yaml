@@ -5,11 +5,12 @@ protocol: 1
 entrypoint: main.py
 timeout_s: 60
 description: >-
-  Pi-hole v6 DNS servers through their REST API: the server and its version,
-  its local DNS names (Local DNS records) and domain, its DHCP server's
-  leases, fixed addresses and pool usage when it is on, and recent lookups
-  from its query log (to name where devices go). Omini creates, changes
-  and removes local DNS names on it.
+  Pi-hole v6 DNS servers through their REST API: the server, its versions
+  and pending updates, interfaces, health and temperatures, its local DNS
+  names (Local DNS records) and domain, its DHCP server's leases, fixed
+  addresses and pool usage when it is on, and recent lookups from its query
+  log (to name where devices go). Omini creates, changes and removes local
+  DNS names on it.
 author: Omini
 homepage: https://github.com/riccardoalv/omini-plugin-pihole
 changes:

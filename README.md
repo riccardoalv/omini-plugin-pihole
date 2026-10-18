@@ -12,6 +12,7 @@ older (the PHP API) are not supported.
 |---|---|
 | Versions (core, FTL), host name, network interfaces | The server on the map (vendor Pi-hole), keyed by its MAC (else its address) so it merges with the machine it runs on |
 | Network interfaces (`lo` left out): name, MAC, IPv4 and IPv6 addresses with their prefix, link (carrier), speed, type (ethernet, wireless, bridge, …) | The server's ports in the device panel |
+| Pending updates: the installed and newest versions of core, web and FTL (and Docker), from Pi-hole's own cached update check | Updates in the device panel; an update is available when any part is behind |
 | System: uptime, CPU use and count, load averages, memory (use, total, used), swap use | Health of the server in the device panel |
 | Temperature sensors (CPU, disks, others) | Health of the server; a sensor of the CPU's own driver is marked as the CPU |
 | Local DNS records (`dns.hosts`), IPv4 only | The network's local names (`nas.lan → 192.168.1.20`); a line with several names gives one name each |
@@ -71,7 +72,7 @@ The plugin signs in (`POST /api/auth`) at the start of each run and signs out
 | GET | `/api/config` | `dns.hosts`, `dns.domain`, `dhcp`; backup |
 | GET | `/api/config/dns/hosts` | Local names (checks after a change) |
 | PUT / DELETE | `/api/config/dns/hosts/<"ip name", URL-encoded>` | `dns.set`, `dns.delete` |
-| GET | `/api/info/version`, `/api/info/host` | Version, name |
+| GET | `/api/info/version`, `/api/info/host` | Versions and pending updates, name |
 | GET | `/api/network/interfaces` | MAC, addresses and interfaces |
 | GET | `/api/info/system`, `/api/info/sensors` | Health and temperatures |
 | GET | `/api/queries?length=1000` | Recent DNS lookups |
@@ -91,6 +92,11 @@ tested against a fake API and the Omini devnet emulator only:
   rounded (`{value, unit}`): they are left out, and read only when they come
   as plain numbers. Without the endpoint (or when it is refused), the address
   is the device's key and there are no interfaces.
+- `/api/info/version`: `local` and `remote` (`version`, `hash`, `branch`)
+  per part. Omini never asks Pi-hole to check for updates: `remote` is what
+  Pi-hole's own scheduled check found. On a branch other than `master`, the
+  commits (`hash`) are compared, as Pi-hole does. Without `remote`, the
+  newest version stays empty.
 - `/api/info/system`: `uptime` (seconds), `cpu.nprocs`, `cpu["%cpu"]`,
   `cpu.load.raw` (1, 5, 15 minutes), `memory.ram` and `memory.swap` with
   `total` and `used` in kB and `%used`. Swap use is left out when there is no

@@ -80,11 +80,26 @@ class FakePihole:
                 "clientid": "*",
             },
         ]
+        # GET /api/info/version: "remote" is Pi-hole's own cached update check.
         self.version = {
-            "core": {"local": {"branch": "master", "version": "v6.1.2", "hash": "abc"}},
-            "web": {"local": {"branch": "master", "version": "v6.2.1", "hash": "def"}},
-            "ftl": {"local": {"branch": "master", "version": "v6.2.3", "hash": "ghi"}},
-            "docker": {"local": None},
+            "core": {
+                "local": {"branch": "master", "version": "v6.1.2", "hash": "abc"},
+                "remote": {"version": "v6.1.2", "hash": "abc"},
+            },
+            "web": {
+                "local": {"branch": "master", "version": "v6.2.1", "hash": "def"},
+                "remote": {"version": "v6.2.1", "hash": "def"},
+            },
+            "ftl": {
+                "local": {
+                    "branch": "master",
+                    "version": "v6.2.3",
+                    "hash": "ghi",
+                    "date": "2025-06-01 12:00:00 +0000",
+                },
+                "remote": {"version": "v6.3", "hash": "jkl"},
+            },
+            "docker": {"local": None, "remote": None},
         }
         # GET /api/network/interfaces (FTL 6.x, netlink): the counters come
         # rounded as {value, unit}, the speed in Mbit/s (-1 when unknown).
