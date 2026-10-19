@@ -28,6 +28,9 @@ from omini_sdk import (
     Temperature,
     log,
 )
+from omini_sdk import optional as sdk_optional
+from omini_sdk.changes import Pending, apply_verify
+from omini_sdk.http import settings as http_settings
 
 try:  # DNS lookups: Omini 1.6 and later
     from omini_sdk import DnsLookup
@@ -62,7 +65,7 @@ def client_from(cfg: Config) -> Client:
     url = cfg.str("url")
     if not url:
         raise PluginError("the address is required")
-    return Client(url, cfg.str("password"), verify_tls=cfg.bool("verify_tls"))
+    return Client(url, cfg.str("password"), state_dir=cfg.state_dir, **http_settings(cfg))
 
 
 def host_of(cfg: Config) -> str:
@@ -73,22 +76,11 @@ def host_of(cfg: Config) -> str:
     return (urlsplit(url).hostname or url).lower()
 
 
-def optional(fn: Callable[[], T], default: T) -> T:
-    """An endpoint some versions lack (404): its default instead."""
-    try:
-        return fn()
-    except NotFound:
-        return default
-
-
-def extra(fn: Callable[[], T], default: T) -> T:
-    """A read that only adds detail: its default when it is missing (404),
-    refused (403) or fails, so the collection goes on."""
-    try:
-        return fn()
-    except (NotFound, PluginError) as e:
-        log.debug("not read: %s", e)
-        return default
+def optional(fn: Callable[[], T], default: T, what: str = "") -> T:
+    """A read that only adds detail, or an endpoint some versions lack: its
+    default when it is missing (404), refused (403) or cannot be read now,
+    so the collection goes on (logged once)."""
+    return sdk_optional(what or "an optional read", fn, default)
 
 
 def mac(value: Any) -> str | None:
@@ -209,7 +201,7 @@ def domain_of(dns: dict[str, Any]) -> str | None:
 
 
 def interfaces(c: Client) -> list[dict[str, Any]]:
-    got = extra(lambda: c.get("/api/network/interfaces"), None) or {}
+    got = optional(lambda: c.get("/api/network/interfaces"), None, "the interfaces") or {}
     if not isinstance(got, dict):
         return []
     return [i for i in got.get("interfaces") or [] if isinstance(i, dict)]
@@ -346,7 +338,7 @@ def kib(value: Any) -> int | None:
 
 def health(dev: Device, c: Client) -> None:
     """Uptime, CPU, memory, load and swap of the machine (GET /api/info/system)."""
-    got = extra(lambda: c.get("/api/info/system"), None)
+    got = optional(lambda: c.get("/api/info/system"), None, "the system health")
     system = got.get("system") if isinstance(got, dict) else None
     if not isinstance(system, dict):
         return
@@ -391,7 +383,7 @@ def celsius(value: Any, unit: str) -> float | None:
 def temperatures(c: Client) -> list[Temperature] | None:
     """The machine's temperature sensors (GET /api/info/sensors), in the unit
     Pi-hole is set to show (C, F or K)."""
-    got = extra(lambda: c.get("/api/info/sensors"), None)
+    got = optional(lambda: c.get("/api/info/sensors"), None, "the sensors")
     sensors = got.get("sensors") if isinstance(got, dict) else None
     if not isinstance(sensors, dict):
         return None
@@ -417,7 +409,7 @@ def temperatures(c: Client) -> list[Temperature] | None:
 
 
 def lease_rows(c: Client) -> list[DhcpLease]:
-    got = optional(lambda: c.get("/api/dhcp/leases"), None) or {}
+    got = optional(lambda: c.get("/api/dhcp/leases"), None, "the DHCP leases") or {}
     out = []
     for row in got.get("leases") or []:
         m, ip = mac(row.get("hwaddr")), ipv4(row.get("ip"))
@@ -510,12 +502,10 @@ def recent_lookups(c: Client) -> list[Any] | None:
     (they only name where devices go)."""
     if DnsLookup is None or "dns_lookups" not in Device.model_fields:
         return None
-    try:
-        got = c.get(f"/api/queries?length={QUERIES_LIMIT}") or {}
-        return lookups(got.get("queries") or []) or None
-    except Exception as e:
-        log.debug("queries not read: %s", e)
+    got = optional(lambda: c.get(f"/api/queries?length={QUERIES_LIMIT}"), {}, "the queries")
+    if not isinstance(got, dict):
         return None
+    return lookups(got.get("queries") or []) or None
 
 
 def config_of(c: Client) -> dict[str, Any]:
@@ -530,10 +520,10 @@ def read(c: Client, host: str) -> Device:
     conf = config_of(c)
     dns = conf.get("dns") or {}
     dhcp = conf.get("dhcp") or {}
-    version_info = extra(lambda: c.get("/api/info/version"), None)
+    version_info = optional(lambda: c.get("/api/info/version"), None, "the versions")
     version_info = version_info if isinstance(version_info, dict) else {}
     vers = versions(version_info)
-    info = (optional(lambda: c.get("/api/info/host"), None) or {}).get("host") or {}
+    info = (optional(lambda: c.get("/api/info/host"), None, "the host") or {}).get("host") or {}
     uname = info.get("uname") or {}
     ifaces = interfaces(c)
     m, ips = identity(ifaces, host)
@@ -585,8 +575,13 @@ def collect(cfg: Config) -> list[Device]:
 
 def test(cfg: Config) -> str:
     with client_from(cfg) as c:
-        vers = versions(optional(lambda: c.get("/api/info/version"), None) or {})
-        hosts = (config_of(c).get("dns") or {}).get("hosts")
+        try:
+            vers = versions(
+                optional(lambda: c.get("/api/info/version"), None, "the versions") or {}
+            )
+            hosts = (config_of(c).get("dns") or {}).get("hosts")
+        finally:
+            c.logout()  # a test leaves no session behind
     v = vers.get("core")
     return f"Connected to Pi-hole{' ' + v if v else ''}, {len(records(hosts))} local names"
 
@@ -624,9 +619,11 @@ def answers(hosts: list[str], name: str) -> list[str]:
     return [ip for ip, names in hosts_lines(hosts) if name in names and ipv4(ip)]
 
 
-def replace_lines(c: Client, hosts: list[str], name: str, new: str | None) -> None:
+def replace_lines(
+    c: Client, hosts: list[str], name: str, new: str | None, done: list[tuple[str, str]]
+) -> None:
     """Take name out of every IPv4 line that holds it (keeping the line's other
-    names) and add the line new; put everything back if Pi-hole refuses."""
+    names) and add the line new; each step goes in ``done``, to undo."""
     touched = [
         h
         for h in hosts
@@ -634,28 +631,80 @@ def replace_lines(c: Client, hosts: list[str], name: str, new: str | None) -> No
         and ipv4(h.split()[0])
         and name in [dns_name(n) for n in h.split()[1:]]
     ]
-    done: list[tuple[str, str]] = []  # (method, line) applied, to undo
+    for line in touched:
+        c.delete(item(line))
+        done.append(("DELETE", line))
+        ip, *names = line.split()
+        rest = [n for n in names if dns_name(n) != name]
+        if rest:
+            kept = " ".join([ip, *rest])
+            c.put(item(kept))
+            done.append(("PUT", kept))
+    if new:
+        c.put(item(new))
+        done.append(("PUT", new))
+
+
+def put_back(c: Client, done: list[tuple[str, str]]) -> None:
+    """Undoes the steps of replace_lines, newest first; raises when one fails."""
+    failed: Exception | None = None
+    for method, line in reversed(done):
+        try:
+            if method == "DELETE":
+                c.put(item(line))
+            else:
+                c.delete(item(line))
+        except NotFound:
+            if method == "DELETE":
+                failed = failed or PluginError(f"Pi-hole lost the line {line}")
+            # a line to remove that is already gone: nothing to undo
+        except PluginError as e:
+            failed = failed or e
+    if failed:
+        raise failed
+
+
+# How long a change waits for Pi-hole to show it (the SDK's window).
+VERIFY_S = 30
+POLL_S = 2
+
+
+def change_name(c: Client, name: str, new: str | None, want: list[str], message: str) -> None:
+    """Changes the lines of name, reads them again until Pi-hole answers
+    ``want``, and puts them back as they were when it does not."""
+    hosts = read_hosts(c)
+    if answers(hosts, name) == want:
+        return
+    done: list[tuple[str, str]] = []
+    untouched: list[bool] = []
+
+    def run() -> None:
+        try:
+            replace_lines(c, hosts, name, new, done)
+        except Exception:
+            if not done:
+                untouched.append(True)  # refused at the first step: nothing to undo
+            raise
+
+    def verify() -> bool:
+        got = answers(read_hosts(c), name)
+        if got == want:
+            return True
+        raise Pending(f"it answers {name} with {', '.join(got) or 'nothing'}")
+
     try:
-        for line in touched:
-            c.delete(item(line))
-            done.append(("DELETE", line))
-            ip, *names = line.split()
-            rest = [n for n in names if dns_name(n) != name]
-            if rest:
-                kept = " ".join([ip, *rest])
-                c.put(item(kept))
-                done.append(("PUT", kept))
-        if new:
-            c.put(item(new))
-    except (PluginError, NotFound) as e:
-        for method, line in reversed(done):
-            with contextlib.suppress(PluginError, NotFound):
-                if method == "DELETE":
-                    c.put(item(line))
-                else:
-                    c.delete(item(line))
-        if isinstance(e, NotFound):
-            raise PluginError(f"Pi-hole did not find {e}; the lines changed were put back") from e
+        apply_verify(
+            run,
+            verify,
+            undo=lambda: put_back(c, done),
+            timeout=VERIFY_S,
+            interval=POLL_S,
+            message=message,
+            check_in="in Pi-hole (Local DNS records)",
+        )
+    except PluginError as e:
+        if untouched and isinstance(e.__cause__, PluginError):
+            raise e.__cause__ from None
         raise
 
 
@@ -667,19 +716,11 @@ def apply(cfg: Config, change: Change) -> list[Device]:
             name, ip = wanted_name(v), ipv4(v.get("ip"))
             if not ip:
                 raise PluginError("dns.set: the address must be an IPv4 address")
-            hosts = read_hosts(c)
-            if answers(hosts, name) != [ip]:
-                replace_lines(c, hosts, name, f"{ip} {name}")
-            if answers(read_hosts(c), name) != [ip]:
-                raise PluginError(f"Pi-hole did not keep {name} → {ip}")
+            change_name(c, name, f"{ip} {name}", [ip], f"Pi-hole did not keep {name} → {ip}")
             log.info("Pi-hole: %s set", name)
         elif kind == "dns.delete":
             name = wanted_name(v)
-            hosts = read_hosts(c)
-            if answers(hosts, name):
-                replace_lines(c, hosts, name, None)
-            if answers(read_hosts(c), name):
-                raise PluginError(f"Pi-hole still answers {name}")
+            change_name(c, name, None, [], f"Pi-hole did not delete {name}")
             log.info("Pi-hole: %s deleted", name)
         else:
             raise PluginError(f"Pi-hole does not support the change {kind}")
@@ -704,7 +745,7 @@ def scrub(value: Any) -> Any:
 
 
 def rows(c: Client, path: str, key: str, sort: tuple[str, ...]) -> list[dict[str, Any]] | None:
-    got = optional(lambda: c.get(path), None)
+    got = optional(lambda: c.get(path), None, path)
     if not isinstance(got, dict):
         return None
     out = [
@@ -717,7 +758,7 @@ def rows(c: Client, path: str, key: str, sort: tuple[str, ...]) -> list[dict[str
 
 def settings(c: Client) -> dict[str, Any]:
     out: dict[str, Any] = {"config": scrub(config_of(c))}
-    groups = optional(lambda: c.get("/api/groups"), None)
+    groups = optional(lambda: c.get("/api/groups"), None, "the groups")
     if isinstance(groups, dict):
         # Lists, domains and clients name their groups by id: keep the ids here.
         out["groups"] = sorted(

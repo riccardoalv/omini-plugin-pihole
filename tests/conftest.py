@@ -445,6 +445,14 @@ class FakePihole:
         return [c for c in self.calls if c[0] != "GET" and not c[1].startswith("/api/auth")]
 
 
+@pytest.fixture(autouse=True)
+def pauses(monkeypatch):
+    """No real pauses (retries, change checks): the seconds asked are kept."""
+    asked = []
+    monkeypatch.setattr("time.sleep", asked.append)
+    return asked
+
+
 @pytest.fixture
 def pihole(monkeypatch):
     fake = FakePihole()

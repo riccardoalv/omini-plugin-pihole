@@ -3,12 +3,14 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
-from omini_sdk import Change, PluginError
+from omini_sdk import Change, Config, PluginError
 
 import main  # noqa: F401  (registers the functions on the SDK's plugin)
 import omini_pihole.collect as collect_module
 from omini_pihole.collect import apply, backup, collect
 from omini_pihole.collect import test as check
+
+PASSWORD = "app-password-123"  # as in conftest
 
 MAC = "dc:a6:32:01:02:03"
 
@@ -388,7 +390,7 @@ def test_dns_set_puts_lines_back_on_not_found(pihole, cfg):
 
     pihole.hook = handler
     before = list(pihole.hosts)
-    with pytest.raises(PluginError, match="put back"):
+    with pytest.raises(PluginError, match=r"did not find .*nas\.lan \(undone\)$"):
         apply(cfg, change("dns.set", {"name": "nas.lan", "ip": "192.168.1.25"}))
     assert sorted(pihole.hosts) == sorted(before)
 
@@ -491,3 +493,114 @@ def test_dns_delete_keeps_reading_the_ipv6_line(pihole, cfg):
     [dev] = apply(cfg, change("dns.delete", {"name": "v6.lan"}))
     assert "fd00::20 v6.lan" in pihole.hosts
     assert ("v6.lan", "fd00::20") in names(dev)
+
+
+# -- the SDK toolkit: the saved session, retries, the wait and the undo --
+
+
+@pytest.fixture
+def kept(pihole, cfg, tmp_path):
+    """A configuration with a state folder: the session is kept between runs."""
+    return Config(dict(cfg), tmp_path)
+
+
+def logins(pihole):
+    return [c for c in pihole.calls if c == ("POST", "/api/auth")]
+
+
+def test_the_session_is_kept_between_runs(pihole, kept, tmp_path):
+    collect(kept)
+    collect(kept)
+    assert len(logins(pihole)) == 1 and pihole.sessions == {"sid-1"}
+    assert ("DELETE", "/api/auth") not in pihole.calls
+    saved = (tmp_path / "session.json").read_text()
+    assert PASSWORD not in saved and "sid-1" in saved
+
+
+def test_a_session_pihole_forgot_signs_in_again(pihole, kept):
+    collect(kept)
+    pihole.sessions.clear()  # Pi-hole restarted, or the session timed out
+    [dev] = collect(kept)
+    assert names(dev) and len(logins(pihole)) == 2 and pihole.sessions == {"sid-2"}
+
+
+def test_the_connection_test_signs_out(pihole, kept, tmp_path):
+    collect(kept)
+    assert check(kept).startswith("Connected to Pi-hole")
+    assert pihole.sessions == set() and not (tmp_path / "session.json").exists()
+
+
+def test_a_refused_password_waits_before_signing_in_again(pihole, kept):
+    kept["password"] = "nope"
+    with pytest.raises(PluginError, match="rejected the password"):
+        collect(kept)
+    with pytest.raises(PluginError, match="waiting a few minutes"):
+        collect(kept)
+    assert len(logins(pihole)) == 1
+    kept["password"] = PASSWORD  # another password is tried at once
+    assert collect(kept)
+
+
+def test_an_unreachable_pihole_is_asked_again_next_run(pihole, kept, pauses):
+    down = {"left": 3}
+
+    def handler(request):
+        if down["left"]:
+            down["left"] -= 1
+            raise httpx.ConnectError("refused", request=request)
+        return pihole.handler(request)
+
+    pihole.hook = handler
+    with pytest.raises(PluginError, match="cannot connect"):
+        collect(kept)
+    assert pauses == [1.0, 2.0]
+    assert collect(kept)  # no wait: only a refused password waits
+
+
+def test_a_change_not_kept_is_put_back(pihole, cfg, pauses):
+    def handler(request):
+        if request.method == "PUT" and "192.168.1.25" in request.url.raw_path.decode():
+            pihole.hosts.append("192.168.1.99 nas.lan")  # kept something else
+            return httpx.Response(201, json={"took": 0.01})
+        return pihole.handler(request)
+
+    pihole.hook = handler
+    with pytest.raises(
+        PluginError,
+        match=r"did not keep nas\.lan → 192\.168\.1\.25: "
+        r"it answers nas\.lan with 192\.168\.1\.99 \(undone\)$",
+    ):
+        apply(cfg, change("dns.set", {"name": "nas.lan", "ip": "192.168.1.25"}))
+    assert pauses == [collect_module.POLL_S] * 15
+    assert "192.168.1.20 nas.lan" in pihole.hosts
+
+
+def test_a_refused_change_is_not_undone(pihole, cfg):
+    pihole.app_sudo = False
+    with pytest.raises(PluginError, match=r"app_sudo' on \(see the plugin's README\)$"):
+        apply(cfg, change("dns.set", {"name": "new.lan", "ip": "192.168.1.5"}))
+
+
+def test_the_timeout_comes_from_the_form(pihole, cfg, monkeypatch):
+    seen = {}
+    real = collect_module.Client
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(collect_module, "Client", spy)
+    collect(cfg)
+    assert (seen["verify_tls"], seen["timeout"]) == (False, 15.0)
+    cfg["timeout_s"] = 40
+    collect(cfg)
+    assert seen["timeout"] == 40.0
+
+
+def test_manifest_groups_the_advanced_fields():
+    from pathlib import Path
+
+    manifest = (Path(__file__).parent.parent / "plugin.yaml").read_text()
+    fields = manifest.split("\nfields:", 1)[1].split("\n  - key: ")[1:]
+    groups = {f.split("\n", 1)[0]: "group: Advanced" in f for f in fields}
+    assert groups == {"url": False, "password": False, "verify_tls": True, "timeout_s": True}

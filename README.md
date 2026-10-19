@@ -6,6 +6,20 @@ network: the local names Omini gives to devices with a fixed address go here
 when the network's DHCP hands out Pi-hole as its DNS server. Pi-hole v5 and
 older (the PHP API) are not supported.
 
+## Requirements
+
+- Omini 1.7 or later (the SDK with the plugin toolkit).
+- Pi-hole v6.
+
+## Form fields
+
+| Field | Example | Notes |
+|---|---|---|
+| Address | `http://192.168.1.53` | Its web interface, without `/admin` (removed when pasted); `http://` is used when none is given |
+| Application password | | See [Account](#account) |
+| Verify the TLS certificate (Advanced) | off | Pi-hole uses a self-signed certificate by default |
+| Timeout, seconds (Advanced) | `15` | How long to wait for each answer (was a fixed 10 s); a refused connection or a busy Pi-hole (429, 503) is asked again twice, after 1 and 2 s, and a read that times out once |
+
 ## What it reads
 
 | Data | Used for |
@@ -33,8 +47,15 @@ not ask for them.
 
 | Change | What it does |
 |---|---|
-| `dns.set` `{name, ip}` | Adds the record `ip name`; when the name is on another IPv4 line, takes it out of that line (the line's other names stay) first; IPv6 lines are never touched. Read again to check it took. If Pi-hole refuses a step, the lines already changed are put back. |
+| `dns.set` `{name, ip}` | Adds the record `ip name`; when the name is on another IPv4 line, takes it out of that line (the line's other names stay) first; IPv6 lines are never touched. Read again to check it took. |
 | `dns.delete` `{name}` | Takes the name out of every IPv4 line that holds it (IPv6 lines stay). Read again to check. |
+
+Each change is read again (every 2 seconds, up to 30) until Pi-hole answers
+the name as asked. One it does not show by then, or that Pi-hole refuses
+halfway, is put back as it was (the lines already changed), and the error
+ends "(undone)" (or "(could not be undone: check it in Pi-hole (Local DNS
+records))"); one refused at its first step (no `app_sudo`) changed nothing
+and says only why.
 
 Pi-hole saves its configuration (`pihole.toml`) by itself. Records have no
 description field, so the ones Omini made are not marked.
@@ -61,14 +82,24 @@ To let Omini change DNS names, the application password needs
 `webserver.api.app_sudo`, or `pihole-FTL --config webserver.api.app_sudo true`).
 Without it Omini only reads, and a change is refused with that hint.
 
-The plugin signs in (`POST /api/auth`) at the start of each run and signs out
-(`DELETE /api/auth`) at the end, so it holds no session between runs.
+The plugin signs in (`POST /api/auth`) once and keeps the session id in its
+state folder (`session.json`, readable only by Omini; tied to a hash of the
+address and password, never the password itself), so Pi-hole, which limits
+logins and open sessions, does not see a login every minute. When Pi-hole has
+forgotten the session (401: a restart, or `webserver.session.timeout` passed),
+the plugin signs in again at once. The connection test signs out
+(`DELETE /api/auth`) at its end, and so does every run when there is no state
+folder. After Pi-hole refuses the password, the plugin waits 10 minutes before
+signing in again (kept in `login-refused.json`); changing the password in
+Omini retries at once. A Pi-hole out of reach is asked again on the next run.
+An optional read (versions, interfaces, health, sensors, leases, the query
+log, the backup's lists) that Pi-hole refuses or cannot answer is skipped.
 
 ## Endpoints
 
 | Method | Path | For |
 |---|---|---|
-| POST / DELETE | `/api/auth` | Sign in (session id in `X-FTL-SID`) / out |
+| POST / DELETE | `/api/auth` | Sign in (session id in `X-FTL-SID`) / out (the connection test) |
 | GET | `/api/config` | `dns.hosts`, `dns.domain`, `dhcp`; backup |
 | GET | `/api/config/dns/hosts` | Local names (checks after a change) |
 | PUT / DELETE | `/api/config/dns/hosts/<"ip name", URL-encoded>` | `dns.set`, `dns.delete` |
