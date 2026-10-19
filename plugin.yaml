@@ -1,6 +1,6 @@
 id: pihole
 name: Pi-hole
-version: 0.2.0
+version: 0.3.0
 protocol: 1
 entrypoint: main.py
 timeout_s: 60
